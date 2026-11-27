@@ -54,6 +54,7 @@ namespace HS_Reconnector.Core
         public bool MinimizeToTrayOnClose { get; set; } = true;
         public bool MinimizeToTrayOnMinimize { get; set; } = false;
         public bool StartMinimizedToTray { get; set; } = false;
+        public bool CheckForUpdatesOnStartup { get; set; } = true;
         public bool VerboseLogging { get; set; } = false;
         public string CustomHearthstoneDirectory { get; set; } = string.Empty;
         public string Language { get; set; } = "auto";

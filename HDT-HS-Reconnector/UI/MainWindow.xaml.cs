@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
@@ -28,6 +29,7 @@ namespace HS_Reconnector.UI
         private static readonly Brush GreenText = FrozenBrush(Color.FromRgb(0x5B, 0xE0, 0x9C));
         private static readonly Brush AmberText = FrozenBrush(Color.FromRgb(0xFF, 0xC2, 0x3A));
         private static readonly Brush AccentLinkBrush = FrozenBrush(Color.FromRgb(0x4C, 0xC2, 0xFF));
+        private static readonly Brush SubtleSeparatorBrush = FrozenBrush(Color.FromRgb(0x56, 0x65, 0x7A));
         private static readonly Brush MutedTextBrush = FrozenBrush(Color.FromRgb(0x93, 0xA0, 0xB2));
         private static readonly Brush OmPreviewDarkBg = FrozenBrush(Color.FromArgb(210, 12, 16, 22));
         private static readonly Brush OmPreviewOutlineBlack = FrozenBrush(Color.FromArgb(235, 0, 0, 0));
@@ -68,6 +70,7 @@ namespace HS_Reconnector.UI
         private bool logDeferredForSelection;
         private int logRefreshPending;
         private CancellationTokenSource updateCheckCts;
+        private CancellationTokenSource startupUpdateDelayCts;
         private UpdateCheckUiState updateUiState = UpdateCheckUiState.Idle;
         private VersionCheckResult lastUpdateResult;
 
@@ -92,9 +95,18 @@ namespace HS_Reconnector.UI
         public void PrepareForExit()
         {
             allowExit = true;
+            try { startupUpdateDelayCts?.Cancel(); } catch { }
             try { updateCheckCts?.Cancel(); } catch { }
             AppLogger.EntryAdded -= OnLogEntryAdded;
             Localization.LanguageChanged -= OnLanguageChanged;
+        }
+
+        public void StartStartupUpdateCheckIfEnabled()
+        {
+            if (allowExit || !AppSettings.Instance.CheckForUpdatesOnStartup)
+                return;
+
+            _ = RunStartupUpdateCheckAsync();
         }
 
         public void SyncOverlayCheckBox()
@@ -287,6 +299,7 @@ namespace HS_Reconnector.UI
                 MinimizeToTrayCheck.IsChecked = s.MinimizeToTrayOnClose;
                 MinimizeToTrayOnMinimizeCheck.IsChecked = s.MinimizeToTrayOnMinimize;
                 StartMinimizedCheck.IsChecked = s.StartMinimizedToTray;
+                CheckUpdatesOnStartupCheck.IsChecked = s.CheckForUpdatesOnStartup;
                 VerboseLoggingCheck.IsChecked = s.VerboseLogging;
                 HsPathTextBox.Text = s.CustomHearthstoneDirectory;
 
@@ -348,6 +361,8 @@ namespace HS_Reconnector.UI
             MinimizeToTrayCheck.Content = Localization.Get("OptMinToTray");
             MinimizeToTrayOnMinimizeCheck.Content = Localization.Get("OptMinToTrayOnMinimize");
             StartMinimizedCheck.Content = Localization.Get("OptStartMin");
+            CheckUpdatesOnStartupCheck.Content = Localization.Get("OptCheckUpdatesOnStartup");
+            RenderBehaviorGitHubLink();
             OptLanguageLabel.Text = Localization.Get("OptLanguage");
             OptHsPathLabel.Text = Localization.Get("OptHsPath");
             BrowseHsButton.Content = Localization.Get("BtnBrowse");
@@ -1130,6 +1145,7 @@ namespace HS_Reconnector.UI
             s.MinimizeToTrayOnClose = MinimizeToTrayCheck.IsChecked == true;
             s.MinimizeToTrayOnMinimize = MinimizeToTrayOnMinimizeCheck.IsChecked == true;
             s.StartMinimizedToTray = StartMinimizedCheck.IsChecked == true;
+            s.CheckForUpdatesOnStartup = CheckUpdatesOnStartupCheck.IsChecked == true;
             s.CustomHearthstoneDirectory = HsPathTextBox.Text;
 
             var selectedLang = (LanguageCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "auto";
@@ -1344,20 +1360,52 @@ namespace HS_Reconnector.UI
 
         private async void CheckUpdatesButton_Click(object sender, RoutedEventArgs e)
         {
+            try { startupUpdateDelayCts?.Cancel(); } catch { }
+            await RunUpdateCheckAsync(isManual: true);
+        }
+
+        private async Task RunStartupUpdateCheckAsync()
+        {
+            var delayCts = new CancellationTokenSource();
+            startupUpdateDelayCts = delayCts;
+            try
+            {
+                await Task.Delay(2000, delayCts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            finally
+            {
+                if (ReferenceEquals(startupUpdateDelayCts, delayCts))
+                    startupUpdateDelayCts = null;
+                delayCts.Dispose();
+            }
+
+            if (allowExit || !AppSettings.Instance.CheckForUpdatesOnStartup)
+                return;
+
+            await RunUpdateCheckAsync(isManual: false);
+        }
+
+        private async Task RunUpdateCheckAsync(bool isManual)
+        {
             if (updateCheckCts != null || allowExit)
                 return;
 
             var cts = new CancellationTokenSource();
             updateCheckCts = cts;
             CheckUpdatesButton.IsEnabled = false;
-            updateUiState = UpdateCheckUiState.Checking;
-            RenderVersionText();
+            if (isManual)
+            {
+                updateUiState = UpdateCheckUiState.Checking;
+                RenderVersionText();
+            }
 
             try
             {
-                var repository = Environment.GetEnvironmentVariable(VersionChecker.RepositoryEnvironmentVariable);
-                if (string.IsNullOrWhiteSpace(repository))
-                    repository = VersionChecker.DefaultRepository;
+                var repository = VersionChecker.ResolveRepository();
                 var token = Environment.GetEnvironmentVariable(VersionChecker.TokenEnvironmentVariable);
 
                 var result = await VersionChecker.CheckLatestAsync(repository, installedVersion, token, cts.Token);
@@ -1370,26 +1418,44 @@ namespace HS_Reconnector.UI
                     updateUiState = UpdateCheckUiState.UpdateAvailable;
                     AppLogger.Info("Update check: new version v" + result.LatestVersion + " is available.");
                 }
-                else
+                else if (isManual)
                 {
                     updateUiState = UpdateCheckUiState.Latest;
                     AppLogger.Info("Update check: already up to date (latest v" + result.LatestVersion + ").");
+                }
+                else
+                {
+                    AppLogger.Debug("Startup update check: already up to date (latest v" + result.LatestVersion + ").");
                 }
             }
             catch (OperationCanceledException)
             {
                 if (!allowExit)
                 {
-                    updateUiState = UpdateCheckUiState.Failed;
-                    AppLogger.Warn("Update check timed out or was canceled.");
+                    if (isManual)
+                    {
+                        updateUiState = UpdateCheckUiState.Failed;
+                        AppLogger.Warn("Update check timed out or was canceled.");
+                    }
+                    else
+                    {
+                        AppLogger.Debug("Startup update check timed out or was canceled.");
+                    }
                 }
             }
             catch (Exception ex)
             {
                 if (!allowExit)
                 {
-                    updateUiState = UpdateCheckUiState.Failed;
-                    AppLogger.Warn("Update check failed (" + ex.GetType().Name + "): " + ex.Message);
+                    if (isManual)
+                    {
+                        updateUiState = UpdateCheckUiState.Failed;
+                        AppLogger.Warn("Update check failed (" + ex.GetType().Name + "): " + ex.Message);
+                    }
+                    else
+                    {
+                        AppLogger.Debug("Startup update check failed (" + ex.GetType().Name + "): " + ex.Message);
+                    }
                 }
             }
             finally
@@ -1413,6 +1479,15 @@ namespace HS_Reconnector.UI
             var versionLabel = "v" + installedVersion.ToString(3);
             VersionText.Inlines.Clear();
             VersionText.Inlines.Add(new Run(versionLabel));
+            VersionText.Inlines.Add(new Run(" · ") { Foreground = SubtleSeparatorBrush });
+
+            var repoLink = new Hyperlink(new Run("GitHub"))
+            {
+                Foreground = AccentLinkBrush,
+                ToolTip = Localization.Get("GitHubLinkTooltip")
+            };
+            repoLink.Click += (s, args) => OpenRepositoryPage();
+            VersionText.Inlines.Add(repoLink);
 
             switch (updateUiState)
             {
@@ -1444,6 +1519,39 @@ namespace HS_Reconnector.UI
                     VersionText.Inlines.Add(new Run(" — "));
                     VersionText.Inlines.Add(new Run(Localization.Get("UpdateFailed")) { Foreground = AmberText });
                     break;
+            }
+        }
+
+        private void RenderBehaviorGitHubLink()
+        {
+            if (BehaviorGitHubText == null)
+                return;
+
+            BehaviorGitHubText.Inlines.Clear();
+            BehaviorGitHubText.Inlines.Add(new Run("GitHub: "));
+            var link = new Hyperlink(new Run(VersionChecker.DefaultRepository))
+            {
+                Foreground = AccentLinkBrush,
+                ToolTip = Localization.Get("GitHubLinkTooltip")
+            };
+            link.Click += (s, args) => OpenRepositoryPage();
+            BehaviorGitHubText.Inlines.Add(link);
+        }
+
+        private static void OpenRepositoryPage()
+        {
+            try
+            {
+                var url = VersionChecker.BuildRepositoryUrl(VersionChecker.DefaultRepository);
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = url,
+                    UseShellExecute = true
+                });
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Warn("Could not open the GitHub page (" + ex.GetType().Name + "): " + ex.Message);
             }
         }
 

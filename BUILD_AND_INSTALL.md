@@ -11,26 +11,26 @@
 ```
 
 Optional parameters:
-- `-Version <x.y.z>` (default: `0.9.1`; must match `AssemblyVersion`, `AssemblyFileVersion`, and `app.manifest`)
+- `-Version <x.y.z>` (default: `0.9.2`; must match `AssemblyVersion`, `AssemblyFileVersion`, and `app.manifest`)
 - `-SkipTests` (skip running unit tests before packaging)
 
-Expected outputs (for version `0.9.1`):
+Expected outputs (for version `0.9.2`):
 
 ```text
-artifacts\HDT-HS-Reconnector\Release-0.9.1\HDT-HS-Reconnector.exe
-artifacts\HDT-HS-Reconnector\Release-0.9.1\HdtBridge.dll
-artifacts\HDT-HS-Reconnector\Release-0.9.1\HdtBootstrap.dll
-artifacts\0.9.1\HDT-HS-Reconnector.exe
-artifacts\0.9.1\HdtBridge.dll
-artifacts\0.9.1\HdtBootstrap.dll
-artifacts\0.9.1\HDT-HS-Reconnector-0.9.1-x64.zip
+artifacts\HDT-HS-Reconnector\Release-0.9.2\HDT-HS-Reconnector.exe
+artifacts\HDT-HS-Reconnector\Release-0.9.2\HdtBridge.dll
+artifacts\HDT-HS-Reconnector\Release-0.9.2\HdtBootstrap.dll
+artifacts\0.9.2\HDT-HS-Reconnector.exe
+artifacts\0.9.2\HdtBridge.dll
+artifacts\0.9.2\HdtBootstrap.dll
+artifacts\0.9.2\HDT-HS-Reconnector-0.9.2-x64.zip
 ```
 
 ## Run Tests and Verify Binaries Manually
 
 ```powershell
 .\tests\Run-Tests.ps1
-.\tests\Verify-Release.ps1 -Binary 'artifacts\0.9.1\HDT-HS-Reconnector.exe'
-.\tests\Verify-Release.ps1 -Binary 'artifacts\0.9.1\HdtBridge.dll'
-.\tests\Verify-Release.ps1 -Binary 'artifacts\0.9.1\HdtBootstrap.dll'
+.\tests\Verify-Release.ps1 -Binary 'artifacts\0.9.2\HDT-HS-Reconnector.exe'
+.\tests\Verify-Release.ps1 -Binary 'artifacts\0.9.2\HdtBridge.dll'
+.\tests\Verify-Release.ps1 -Binary 'artifacts\0.9.2\HdtBootstrap.dll'
 ```

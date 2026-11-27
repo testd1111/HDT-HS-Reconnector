@@ -694,7 +694,8 @@
                     <StackPanel>
                         <CheckBox x:Name="MinimizeToTrayCheck" Content="Minimize to system tray on window close" />
                         <CheckBox x:Name="MinimizeToTrayOnMinimizeCheck" Content="Minimize to system tray when minimizing window" />
-                        <CheckBox x:Name="StartMinimizedCheck" Content="Start minimized to system tray" Margin="0,4,0,14" />
+                        <CheckBox x:Name="StartMinimizedCheck" Content="Start minimized to system tray" />
+                        <CheckBox x:Name="CheckUpdatesOnStartupCheck" Content="Check for updates on startup" Margin="0,4,0,14" />
 
                         <Grid Margin="0,0,0,14">
                             <Grid.ColumnDefinitions>
@@ -720,9 +721,19 @@
                             <Button x:Name="BrowseHsButton" Grid.Column="1" Style="{StaticResource SecondaryButton}" Click="BrowseHsButton_Click" Content="Browse..." />
                         </Grid>
 
-                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                            <Button x:Name="SaveBehaviorButton" Style="{StaticResource PrimaryButton}" Click="SaveSettingsButton_Click" Content="Save &amp; Apply" />
-                        </StackPanel>
+                        <DockPanel>
+                            <TextBlock x:Name="BehaviorGitHubText"
+                                       DockPanel.Dock="Left"
+                                       VerticalAlignment="Center"
+                                       FontSize="12.5"
+                                       Foreground="#8E9DB2" />
+                            <Button x:Name="SaveBehaviorButton"
+                                    DockPanel.Dock="Right"
+                                    HorizontalAlignment="Right"
+                                    Style="{StaticResource PrimaryButton}"
+                                    Click="SaveSettingsButton_Click"
+                                    Content="Save &amp; Apply" />
+                        </DockPanel>
                     </StackPanel>
                 </Border>
             </TabItem>

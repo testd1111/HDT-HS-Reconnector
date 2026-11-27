@@ -1541,6 +1541,8 @@ class TestHarness
         {
             Check(VersionChecker.ValidateRepository("  testd1111/HDT-HS-Reconnector ") == "testd1111/HDT-HS-Reconnector",
                 "valid repository was rejected");
+            Check(VersionChecker.BuildRepositoryUrl(VersionChecker.DefaultRepository) == "https://github.com/testd1111/HDT-HS-Reconnector",
+                "unexpected repository URL");
             Check(VersionChecker.BuildReleasePageUrl(VersionChecker.DefaultRepository) == "https://github.com/testd1111/HDT-HS-Reconnector/releases/latest",
                 "unexpected release URL");
 
@@ -1597,6 +1599,31 @@ class TestHarness
                 "OK|bridge=" + HdtBridgeClient.ExpectedBridgeVersion + "|hdtVersion=1.60.8|ready=0|total=7|missing=initializing|inMatch=0|isBg=0|pending=0|last=hdt_initializing");
             Check(parsedInit.State == HdtConnectionState.Checking && parsedInit.BridgeAttached && !parsedInit.BridgeOutdated,
                 "initializing CHECK response should map to Checking state");
+        });
+
+        Test("CheckForUpdatesOnStartup defaults on, preserves default on legacy XML, and persists false", () =>
+        {
+            var path = Path.GetTempFileName();
+            var original = AppSettings.Instance.CheckForUpdatesOnStartup;
+            try
+            {
+                Check(new AppSettings().CheckForUpdatesOnStartup, "CheckForUpdatesOnStartup should default to true");
+
+                File.WriteAllText(path, "<AppSettings><OverlayScalePercent>100</OverlayScalePercent></AppSettings>");
+                AppSettings.Load(path);
+                Check(AppSettings.Instance.CheckForUpdatesOnStartup, "legacy settings without CheckForUpdatesOnStartup should default to true");
+
+                AppSettings.Instance.CheckForUpdatesOnStartup = false;
+                AppSettings.Save(path);
+                AppSettings.Instance.CheckForUpdatesOnStartup = true;
+                AppSettings.Load(path);
+                Check(!AppSettings.Instance.CheckForUpdatesOnStartup, "CheckForUpdatesOnStartup=false did not persist");
+            }
+            finally
+            {
+                AppSettings.Instance.CheckForUpdatesOnStartup = original;
+                File.Delete(path);
+            }
         });
 
         Console.WriteLine("Failures: " + failures);

@@ -103,9 +103,20 @@ namespace HS_Reconnector.Core
             return value;
         }
 
+        public static string BuildRepositoryUrl(string repository)
+        {
+            return "https://github.com/" + ValidateRepository(repository);
+        }
+
         public static string BuildReleasePageUrl(string repository)
         {
-            return "https://github.com/" + ValidateRepository(repository) + "/releases/latest";
+            return BuildRepositoryUrl(repository) + "/releases/latest";
+        }
+
+        public static string ResolveRepository()
+        {
+            var repository = Environment.GetEnvironmentVariable(RepositoryEnvironmentVariable);
+            return string.IsNullOrWhiteSpace(repository) ? DefaultRepository : repository.Trim();
         }
 
         public static int CompareTagToInstalledVersion(string tag, Version installedVersion)

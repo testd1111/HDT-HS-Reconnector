@@ -119,6 +119,8 @@ namespace HS_Reconnector
 
             if (!AppSettings.Instance.StartMinimizedToTray || !hotkeyReady)
                 mainWindow.Show();
+
+            mainWindow.StartStartupUpdateCheckIfEnabled();
         }
 
         private void ShowMainWindow()
