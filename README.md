@@ -7,7 +7,7 @@ A standalone Windows app for reconnecting to your current Hearthstone match whil
 > When Hearthstone Deck Tracker supported plugins, they had direct access to tracker match data (past opponent boards, tavern tiers, triples, etc.). Without plugin support, a regular reconnect loses this data in HDT.
 >
 > **Why this is a separate app from [HS-Reconnector](https://github.com/testd1111/HS-Reconnector):**
-> - Preserving HDT data relies on companion DLLs (`HdtBootstrap.dll` and `HdtBridge.dll`) that hook into the HDT process.
+> - Preserving HDT data relies on companion DLLs (`HdtBootstrap.dll` and `HdtBridge.dll`) that attach **only to `HearthstoneDeckTracker.exe`**. The app never injects into or modifies `Hearthstone.exe` — just like standalone `HS-Reconnector`, reconnecting only reads `Hearthstone.log` and resets the TCP connection via Windows APIs.
 > - Antivirus software may flag this approach, and some users prefer not to use process-hooking tools.
 > - Future HDT updates may temporarily break data capture until HDT-HS-Reconnector is updated.
 >
