@@ -27,6 +27,14 @@ Requires Windows 10 (1803+) or Windows 11, x64 (and 64-bit HDT). The app detects
 
 **Compatibility with gaming accelerators.** HDT-HS-Reconnector may be unable to reconnect if a ping reducer or gaming accelerator redirects Hearthstone traffic through a proxy. HDT-HS-Reconnector needs to find the match-server TCP connection owned by Hearthstone. If reconnecting fails, try excluding Hearthstone from the accelerator or temporarily turning the accelerator off.
 
+## Opponent Memory
+
+In Solo Battlegrounds, a badge next to the previous opponent's portrait shows the last combat outcome and damage on the opposite side of HDT's tavern tier and tribe icons so nothing overlaps. It survives reconnects and can be customized (colors, damage number or dot, style, scale, offset) or disabled under **Opponent Memory**.
+
+| Win — dealt 10 damage | Loss — took 8 damage | Draw — 0 damage |
+| :---: | :---: | :---: |
+| ![Win for 10 damage](docs/screenshots/opponent-memory-win.png) | ![Loss for 8 damage](docs/screenshots/opponent-memory-loss.png) | ![Draw for 0 damage](docs/screenshots/opponent-memory-draw.png) |
+
 ## Ping & Region
 
 The optional in-game overlay shows match-server latency and region. Enable it under **Ping & Region**. See [how it works and how to configure it](PING.md).
