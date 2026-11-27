@@ -129,9 +129,14 @@ namespace HdtBridge
             var hdtAsm = HdtReflection.FindHdtAssembly();
             report.HdtVersion = GetHdtVersion(hdtAsm);
 
+            if (!HdtReflection.TryGetHdtCoreObjects(out var game, out var overlay, out var initializing))
+            {
+                report.MissingItems.Add(initializing ? "initializing" : "core");
+                report.LastAction = initializing ? "hdt_initializing" : "hdt_not_ready";
+                return report;
+            }
+
             var coreType = HdtReflection.FindType("Hearthstone_Deck_Tracker.Core");
-            var game = HdtReflection.GetStaticMemberValue(coreType, "Game");
-            var overlay = HdtReflection.GetStaticMemberValue(coreType, "Overlay");
             var gameType = game?.GetType() ?? HdtReflection.FindType("Hearthstone_Deck_Tracker.Hearthstone.GameV2");
             var overlayType = overlay?.GetType() ?? HdtReflection.FindType("Hearthstone_Deck_Tracker.Windows.OverlayWindow");
             var entityType = HdtReflection.FindType("Hearthstone_Deck_Tracker.Hearthstone.Entities.Entity");
@@ -236,10 +241,7 @@ namespace HdtBridge
             var result = new HdtSaveResult();
             try
             {
-                var coreType = HdtReflection.FindType("Hearthstone_Deck_Tracker.Core");
-                var game = HdtReflection.GetStaticMemberValue(coreType, "Game");
-                var overlay = HdtReflection.GetStaticMemberValue(coreType, "Overlay");
-                if (game == null || overlay == null)
+                if (!HdtReflection.TryGetHdtCoreObjects(out var game, out var overlay, out _))
                 {
                     result.Reason = "hdt_not_ready";
                     return result;
@@ -520,10 +522,7 @@ namespace HdtBridge
                     return;
                 }
 
-                var coreType = HdtReflection.FindType("Hearthstone_Deck_Tracker.Core");
-                var game = HdtReflection.GetStaticMemberValue(coreType, "Game");
-                var overlay = HdtReflection.GetStaticMemberValue(coreType, "Overlay");
-                if (game == null || overlay == null)
+                if (!HdtReflection.TryGetHdtCoreObjects(out var game, out var overlay, out _))
                     return;
 
                 var isInMenu = Convert.ToBoolean(HdtReflection.GetMemberValue(game, "IsInMenu") ?? false);
@@ -913,10 +912,7 @@ namespace HdtBridge
 
             try
             {
-                var coreType = HdtReflection.FindType("Hearthstone_Deck_Tracker.Core");
-                var game = HdtReflection.GetStaticMemberValue(coreType, "Game");
-                var overlay = HdtReflection.GetStaticMemberValue(coreType, "Overlay");
-                if (game == null || overlay == null)
+                if (!HdtReflection.TryGetHdtCoreObjects(out var game, out var overlay, out _))
                     return;
 
                 var isInMenu = Convert.ToBoolean(HdtReflection.GetMemberValue(game, "IsInMenu") ?? false);

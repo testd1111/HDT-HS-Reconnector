@@ -791,14 +791,14 @@ class TestHarness
             };
             var ready = HdtBridgeClient.ParseCheckResponse(
                 detected,
-                "OK|bridge=0.8|hdtVersion=1.60.8|ready=7|total=7|missing=|inMatch=1|isBg=1|pending=0|last=ready");
+                "OK|bridge=" + HdtBridgeClient.ExpectedBridgeVersion + "|hdtVersion=1.60.8|ready=7|total=7|missing=|inMatch=1|isBg=1|pending=0|last=ready");
             Check(ready.State == HdtConnectionState.Ready && !ready.BridgeOutdated, "expected up-to-date Ready state");
             Check(ready.BridgeAttached && ready.ReadyHooks == 7 && ready.TotalHooks == 7, "expected 7/7 hooks");
             Check(ready.IsBattlegrounds && ready.InMatch, "expected BG match flags");
 
             var partial = HdtBridgeClient.ParseCheckResponse(
                 detected,
-                "OK|bridge=0.7|hdtVersion=1.60.9|ready=5|total=7|missing=bobsBuddy,leaderboard|inMatch=0|isBg=0|pending=0|last=ready");
+                "OK|bridge=0.8|hdtVersion=1.60.9|ready=5|total=7|missing=bobsBuddy,leaderboard|inMatch=0|isBg=0|pending=0|last=ready");
             Check(partial.State == HdtConnectionState.Partial && partial.BridgeOutdated, "expected Partial outdated state");
             Check(partial.MissingHooks == "bobsBuddy,leaderboard", "expected missing hook list");
 
@@ -1570,6 +1570,35 @@ class TestHarness
             Check(invalidTagThrew, "invalid tag should throw FormatException");
         });
 
+        Test("TryGetHdtCoreObjects avoids lazy Core.Game/Core.Overlay getters while HDT initializes", () =>
+        {
+            LazyCoreProbe.Reset();
+            Check(!HdtBridge.HdtReflection.TryGetHdtCoreObjectsFromType(typeof(LazyCoreProbe), out var g, out var o, out var init)
+                && g == null && o == null && init
+                && LazyCoreProbe.GameGetterCalls == 0 && LazyCoreProbe.OverlayGetterCalls == 0,
+                "uninitialized Core should return initializing without invoking lazy getters");
+
+            LazyCoreProbe.SetInitialized(true);
+            Check(!HdtBridge.HdtReflection.TryGetHdtCoreObjectsFromType(typeof(LazyCoreProbe), out g, out o, out init)
+                && g == null && o == null && init
+                && LazyCoreProbe.GameGetterCalls == 0 && LazyCoreProbe.OverlayGetterCalls == 0,
+                "null backing fields should return initializing without invoking lazy getters");
+
+            var fakeGame = new object();
+            var fakeOverlay = new object();
+            LazyCoreProbe.SetBackingFields(fakeGame, fakeOverlay);
+            Check(HdtBridge.HdtReflection.TryGetHdtCoreObjectsFromType(typeof(LazyCoreProbe), out g, out o, out init)
+                && ReferenceEquals(g, fakeGame) && ReferenceEquals(o, fakeOverlay) && !init
+                && LazyCoreProbe.GameGetterCalls == 0 && LazyCoreProbe.OverlayGetterCalls == 0,
+                "populated backing fields should be read directly without invoking lazy getters");
+
+            var parsedInit = HdtBridgeClient.ParseCheckResponse(
+                new HdtDetectionInfo { IsRunning = true, ProcessId = 42, InstalledVersion = "1.60.8" },
+                "OK|bridge=" + HdtBridgeClient.ExpectedBridgeVersion + "|hdtVersion=1.60.8|ready=0|total=7|missing=initializing|inMatch=0|isBg=0|pending=0|last=hdt_initializing");
+            Check(parsedInit.State == HdtConnectionState.Checking && parsedInit.BridgeAttached && !parsedInit.BridgeOutdated,
+                "initializing CHECK response should map to Checking state");
+        });
+
         Console.WriteLine("Failures: " + failures);
         return failures == 0 ? 0 : 1;
     }
@@ -1613,6 +1642,50 @@ class OverloadProbeDerived : OverloadProbeBase
 {
     public string ReadTag(int x) => "int:" + x;
     public string ReadTag(HearthDb.Enums.GameTag tag) => "enum:" + (int)tag;
+}
+
+class LazyCoreProbe
+{
+    private static object _game;
+    private static object _overlay;
+    public static bool Initialized { get; private set; }
+    public static int GameGetterCalls;
+    public static int OverlayGetterCalls;
+
+    public static object Game
+    {
+        get
+        {
+            GameGetterCalls++;
+            throw new InvalidOperationException("Lazy Game getter must not be invoked from background thread");
+        }
+    }
+
+    public static object Overlay
+    {
+        get
+        {
+            OverlayGetterCalls++;
+            throw new InvalidOperationException("Lazy Overlay getter must not be invoked from background thread");
+        }
+    }
+
+    public static void Reset()
+    {
+        _game = null;
+        _overlay = null;
+        Initialized = false;
+        GameGetterCalls = 0;
+        OverlayGetterCalls = 0;
+    }
+
+    public static void SetInitialized(bool value) => Initialized = value;
+
+    public static void SetBackingFields(object game, object overlay)
+    {
+        _game = game;
+        _overlay = overlay;
+    }
 }
 
 namespace HearthMirror.Objects

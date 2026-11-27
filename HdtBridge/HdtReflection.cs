@@ -256,6 +256,78 @@ namespace HdtBridge
             return accessor.Field?.GetValue(null);
         }
 
+        public static bool TryGetStaticFieldValue(Type type, string fieldName, out object value)
+        {
+            value = null;
+            if (type == null || string.IsNullOrEmpty(fieldName))
+                return false;
+
+            var field = GetFieldHierarchy(type, fieldName, AnyStatic);
+            if (field == null)
+                return false;
+
+            value = field.GetValue(null);
+            return true;
+        }
+
+        public static bool IsHdtCoreInitialized(Type coreType)
+        {
+            if (coreType == null)
+                return false;
+
+            if (TryGetStaticFieldValue(coreType, "<Initialized>k__BackingField", out var backingVal))
+                return backingVal is bool b && b;
+
+            if (HasMember(coreType, "Initialized", isStatic: true))
+                return Convert.ToBoolean(GetStaticMemberValue(coreType, "Initialized") ?? false);
+
+            return true;
+        }
+
+        public static bool TryGetHdtCoreObjects(out object game, out object overlay, out bool initializing)
+        {
+            return TryGetHdtCoreObjectsFromType(FindType("Hearthstone_Deck_Tracker.Core"), out game, out overlay, out initializing);
+        }
+
+        internal static bool TryGetHdtCoreObjectsFromType(Type coreType, out object game, out object overlay, out bool initializing)
+        {
+            game = null;
+            overlay = null;
+            initializing = false;
+
+            if (coreType == null)
+                return false;
+
+            if (!IsHdtCoreInitialized(coreType))
+            {
+                initializing = true;
+                return false;
+            }
+
+            // Read backing fields directly so background threads never trigger HDT's lazy
+            // Core.Game / Core.Overlay property getters (which construct OverlayWindow and
+            // its ViewModels / unfrozen WPF BitmapImage placeholders off the UI thread).
+            if (TryGetStaticFieldValue(coreType, "_game", out var gameFieldVal))
+                game = gameFieldVal;
+            else
+                game = GetStaticMemberValue(coreType, "Game");
+
+            if (TryGetStaticFieldValue(coreType, "_overlay", out var overlayFieldVal))
+                overlay = overlayFieldVal;
+            else
+                overlay = GetStaticMemberValue(coreType, "Overlay");
+
+            if (game == null || overlay == null)
+            {
+                game = null;
+                overlay = null;
+                initializing = true;
+                return false;
+            }
+
+            return true;
+        }
+
         public static bool SetStaticMemberValue(Type type, string name, object value)
         {
             if (type == null || string.IsNullOrEmpty(name))
@@ -361,6 +433,8 @@ namespace HdtBridge
 
             var dispatcherObj = target as DispatcherObject;
             var dispatcher = dispatcherObj?.Dispatcher;
+            if (dispatcher == null && target == null)
+                dispatcher = System.Windows.Application.Current?.Dispatcher;
             if (dispatcher == null || dispatcher.CheckAccess())
             {
                 SafeAction();

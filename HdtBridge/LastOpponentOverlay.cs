@@ -362,7 +362,7 @@ namespace HdtBridge
                 return;
             }
 
-            HdtReflection.InvokeOnDispatcher(overlay, () =>
+            HdtReflection.InvokeOnDispatcher(overlay ?? (object)containerCanvas, () =>
             {
                 if (containerCanvas != null)
                     containerCanvas.Visibility = Visibility.Collapsed;

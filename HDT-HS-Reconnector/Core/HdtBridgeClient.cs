@@ -58,7 +58,7 @@ namespace HS_Reconnector.Core
         private const string BridgeDllName = "HdtBridge.dll";
         private const int MaxPipeResponseBytes = 8192;
         private static readonly UTF8Encoding Utf8NoBom = new UTF8Encoding(false);
-        internal const string ExpectedBridgeVersion = "0.8";
+        internal const string ExpectedBridgeVersion = "0.9";
 
         private readonly object sync = new object();
         private readonly SemaphoreSlim ipcLock = new SemaphoreSlim(1, 1);
@@ -562,9 +562,12 @@ namespace HS_Reconnector.Core
                 : (detected?.EffectiveVersion ?? string.Empty);
 
             var bridgeVer = GetValue(map, "bridge");
+            var isInitializing = ready == 0 && string.Equals(missing, "initializing", StringComparison.OrdinalIgnoreCase);
             return new HdtStatusSnapshot
             {
-                State = ready >= total ? HdtConnectionState.Ready : HdtConnectionState.Partial,
+                State = isInitializing
+                    ? HdtConnectionState.Checking
+                    : ready >= total ? HdtConnectionState.Ready : HdtConnectionState.Partial,
                 ExePath = detected?.EffectiveExePath ?? string.Empty,
                 HdtVersion = effectiveVersion,
                 IsRunning = true,

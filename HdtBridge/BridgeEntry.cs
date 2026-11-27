@@ -12,7 +12,7 @@ namespace HdtBridge
 {
     public static class BridgeEntry
     {
-        public const string BridgeVersion = "0.8";
+        public const string BridgeVersion = "0.9";
         private const string PipePrefix = "HDT-HS-Reconnector-Bridge-";
         private const int MaxLineBytes = 8192;
         private const int ClientReadTimeoutMs = 3000;

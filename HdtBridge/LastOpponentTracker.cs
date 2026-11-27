@@ -157,8 +157,7 @@ namespace HdtBridge
 
             if (!normalized.Enabled)
             {
-                var coreType = HdtReflection.FindType("Hearthstone_Deck_Tracker.Core");
-                var overlay = HdtReflection.GetStaticMemberValue(coreType, "Overlay");
+                HdtReflection.TryGetHdtCoreObjects(out _, out var overlay, out _);
                 overlayRenderer.Hide(overlay, force: true);
             }
             else
@@ -195,18 +194,15 @@ namespace HdtBridge
 
             try
             {
+                if (!HdtReflection.TryGetHdtCoreObjects(out var game, out var overlay, out _))
+                    return;
+
                 if ((!subscribedGameStart || !subscribedTurnStart || !subscribedPredamage)
                     && Volatile.Read(ref subscribeAttempts) < MaxSubscribeAttempts
                     && DateTime.UtcNow >= nextSubscribeRetryUtc)
                 {
                     TrySubscribeGameEvents();
                 }
-
-                var coreType = HdtReflection.FindType("Hearthstone_Deck_Tracker.Core");
-                var game = HdtReflection.GetStaticMemberValue(coreType, "Game");
-                var overlay = HdtReflection.GetStaticMemberValue(coreType, "Overlay");
-                if (game == null || overlay == null)
-                    return;
 
                 ProcessTick(game, overlay, DateTime.UtcNow);
             }
@@ -828,9 +824,7 @@ namespace HdtBridge
                     combatRound = activeCombatRound;
                 }
 
-                var coreType = HdtReflection.FindType("Hearthstone_Deck_Tracker.Core");
-                var game = HdtReflection.GetStaticMemberValue(coreType, "Game");
-                if (game == null)
+                if (!HdtReflection.TryGetHdtCoreObjects(out var game, out _, out _))
                     return;
 
                 var inCombat = Convert.ToBoolean(HdtReflection.GetMemberValue(game, "IsBattlegroundsCombatPhase") ?? false);

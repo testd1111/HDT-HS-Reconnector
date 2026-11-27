@@ -641,7 +641,9 @@ namespace HS_Reconnector.Core
                 if (disposed)
                     return;
 
-                var delaySeconds = snap.BridgeAttached && !snap.PendingRestore ? 4 : 2;
+                var delaySeconds = snap.State == HdtConnectionState.Ready && !snap.PendingRestore
+                    ? 4
+                    : snap.State == HdtConnectionState.Checking ? 1 : 2;
                 nextHdtRefreshUtc = DateTime.UtcNow.AddSeconds(delaySeconds);
                 AppLogger.Debug(string.Format(
                     "HDT status snapshot: state={0}, bridge={1} (outdated={2}), hooks={3}/{4}, inMatch={5}, bg={6}, pending={7}, nextCheck={8}s",
