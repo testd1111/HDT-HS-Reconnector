@@ -1,0 +1,14 @@
+.vs/
+AGENTS.md
+CODE_REVIEW.md
+artifacts/
+artifacts_for_all/
+bin/
+obj/
+TestResults/
+*.user
+*.suo
+*.cache
+*.pdb
+*.log
+*.tmp
