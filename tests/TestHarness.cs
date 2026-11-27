@@ -1626,6 +1626,137 @@ class TestHarness
             }
         });
 
+        Test("HdtStatePreserver preserves pending board across back-to-back reconnect SAVE before restore completes", () =>
+        {
+            var game = new Hearthstone_Deck_Tracker.Hearthstone.GameV2();
+            var overlay = new Hearthstone_Deck_Tracker.Windows.OverlayWindow();
+            Hearthstone_Deck_Tracker.Core.Game = game;
+            Hearthstone_Deck_Tracker.Core.Overlay = overlay;
+            Hearthstone_Deck_Tracker.OpponentDeadForTracker.Reset();
+
+            using (var preserver = new HdtBridge.HdtStatePreserver())
+            {
+                var t1 = DateTime.UtcNow.AddMinutes(-3);
+                game.IsInMenu = false;
+                game.IsBattlegroundsMatch = true;
+                game.CurrentMode = "GAMEPLAY";
+                game.GameEntity = new object();
+                game.TurnNumber = 7;
+                game.CurrentGameStats = new Hearthstone_Deck_Tracker.Hearthstone.FakeGameStats { GameId = Guid.NewGuid(), StartTime = t1 };
+                game.MetaData.ServerInfo.GameHandle = 55501u;
+                game.SetBoardSnapshot(2, "board-p2");
+                game.SetDeitySnapshot(2, "deity-p2");
+
+                var save1 = preserver.SaveBeforeReconnect();
+                Check(save1.Saved && save1.Boards == 1 && save1.Deities == 1, "first save should capture board and deity");
+
+                // Reconnect #1 reset HDT, entities not loaded yet -> user triggers SAVE #2 for same GameHandle
+                game.ResetAll();
+                game.CurrentGameStats = new Hearthstone_Deck_Tracker.Hearthstone.FakeGameStats { GameId = Guid.NewGuid(), StartTime = t1.AddSeconds(10) };
+                game.MetaData.ServerInfo.GameHandle = 55501u;
+                var save2 = preserver.SaveBeforeReconnect();
+                Check(save2.Saved && save2.Boards == 1 && save2.Deities == 1, "second save should carry forward un-restored board/deity");
+
+                // Reconnect #2 finishes in new GameStats session
+                game.ResetAll();
+                game.CurrentGameStats = new Hearthstone_Deck_Tracker.Hearthstone.FakeGameStats { GameId = Guid.NewGuid(), StartTime = t1.AddSeconds(20) };
+                game.MetaData.ServerInfo.GameHandle = 55501u;
+                preserver.NotifyReconnected();
+                Check(Equals(game.GetBoardSnapshot(2), "board-p2"), "preserved board was lost after repeated reconnect");
+                Check(Equals(game.GetDeitySnapshot(2), "deity-p2"), "preserved deity was lost after repeated reconnect");
+            }
+        });
+
+        Test("HdtStatePreserver deduplicates cumulative triples, avoids cross-hero EntityId reuse, and merges partial dead-for lists", () =>
+        {
+            var game = new Hearthstone_Deck_Tracker.Hearthstone.GameV2();
+            var overlay = new Hearthstone_Deck_Tracker.Windows.OverlayWindow();
+            Hearthstone_Deck_Tracker.Core.Game = game;
+            Hearthstone_Deck_Tracker.Core.Overlay = overlay;
+            Hearthstone_Deck_Tracker.OpponentDeadForTracker.Reset();
+
+            using (var preserver = new HdtBridge.HdtStatePreserver())
+            {
+                var t1 = DateTime.UtcNow.AddMinutes(-4);
+                game.IsInMenu = false;
+                game.IsBattlegroundsMatch = true;
+                game.CurrentMode = "GAMEPLAY";
+                game.GameEntity = new object();
+                game.TurnNumber = 8;
+                game.CurrentGameStats = new Hearthstone_Deck_Tracker.Hearthstone.FakeGameStats { GameId = Guid.NewGuid(), StartTime = t1 };
+                game.MetaData.ServerInfo.GameHandle = 77702u;
+
+                var heroA = new Hearthstone_Deck_Tracker.Hearthstone.Entities.Entity(101) { CardId = "TB_BaconShop_HERO_A", IsHero = true };
+                heroA.SetTag(HearthDb.Enums.GameTag.PLAYER_ID, 2);
+                heroA.SetTag(HearthDb.Enums.GameTag.PLAYER_TECH_LEVEL, 4);
+                game.Entities[101] = heroA;
+
+                var heroC = new Hearthstone_Deck_Tracker.Hearthstone.Entities.Entity(102) { CardId = "TB_BaconShop_HERO_C", IsHero = true };
+                heroC.SetTag(HearthDb.Enums.GameTag.PLAYER_ID, 3);
+                heroC.SetTag(HearthDb.Enums.GameTag.PLAYER_TECH_LEVEL, 4);
+                game.Entities[102] = heroC;
+
+                // Hero A: 2 triples on tier 3 + 1 triple on tier 4 (sum=3), tavern-up on turn 6
+                game.SetTriples(101, 3, 2);
+                game.SetTriples(101, 4, 1);
+                game.SetTavernUp(101, 4, 6);
+                // Hero C: tavern-up on turn 5 (will test EntityId 102 collision with Hero B after reconnect!)
+                game.SetTavernUp(102, 4, 5);
+                // Dead-for tracker: player 5 dead 4 turns, player 6 dead 2 turns
+                Hearthstone_Deck_Tracker.OpponentDeadForTracker.Seed(new[] { 5, 6 }, new[] { 4, 2 });
+
+                Check(preserver.SaveBeforeReconnect().Saved, "save should succeed");
+
+                // Simulate reconnect where:
+                // 1. Hero A remapped to 201 and HDT already dumped cumulative 3 triples into tier 4
+                // 2. EntityId 102 now belongs to DIFFERENT Hero B (Hero C not yet loaded!)
+                // 3. OpponentDeadForTracker already registered player 6 with 0 turns (missing player 5!)
+                game.ResetAll();
+                Hearthstone_Deck_Tracker.OpponentDeadForTracker.Reset();
+                Hearthstone_Deck_Tracker.OpponentDeadForTracker.Seed(new[] { 6 }, new[] { 0 });
+
+                game.CurrentGameStats = new Hearthstone_Deck_Tracker.Hearthstone.FakeGameStats { GameId = Guid.NewGuid(), StartTime = t1.AddSeconds(30) };
+                game.MetaData.ServerInfo.GameHandle = 77702u;
+
+                var heroAAfter = new Hearthstone_Deck_Tracker.Hearthstone.Entities.Entity(201) { CardId = "TB_BaconShop_HERO_A", IsHero = true };
+                heroAAfter.SetTag(HearthDb.Enums.GameTag.PLAYER_ID, 2);
+                game.Entities[201] = heroAAfter;
+                game.SetTriples(201, 4, 3);
+
+                var heroBReusedId = new Hearthstone_Deck_Tracker.Hearthstone.Entities.Entity(102) { CardId = "TB_BaconShop_HERO_B", IsHero = true };
+                heroBReusedId.SetTag(HearthDb.Enums.GameTag.PLAYER_ID, 7);
+                game.Entities[102] = heroBReusedId;
+
+                preserver.NotifyReconnected();
+
+                // Finding #2: Hero A must have {3:2, 4:1} (sum=3), NOT {3:2, 4:3} (sum=5)
+                Check(game.GetTriples(201, 3) == 2 && game.GetTriples(201, 4) == 1,
+                    string.Format("triples doubled after reconnect: tier3={0}, tier4={1}", game.GetTriples(201, 3), game.GetTriples(201, 4)));
+
+                // Finding #3: Hero B at reused EntityId 102 must NOT receive Hero C's tavern-up history
+                Check(game.GetTavernUp(102, 4) == 0, "Hero C's tavern history leaked onto different Hero B reusing EntityId 102");
+
+                // Finding #4: Dead-for list must merge missing player 5 (4 turns) and preserve player 6 (2 turns)
+                Check(Hearthstone_Deck_Tracker.OpponentDeadForTracker.DeadCount == 2
+                    && Hearthstone_Deck_Tracker.OpponentDeadForTracker.GetDeadTurnsFor(5) == 4
+                    && Hearthstone_Deck_Tracker.OpponentDeadForTracker.GetDeadTurnsFor(6) == 2,
+                    "partial OpponentDeadForTracker was not merged with saved dead players");
+
+                // Now Hero C finally loads at EntityId 205 -> next pass restores Hero C cleanly without doubling Hero A
+                var heroCAfter = new Hearthstone_Deck_Tracker.Hearthstone.Entities.Entity(205) { CardId = "TB_BaconShop_HERO_C", IsHero = true };
+                heroCAfter.SetTag(HearthDb.Enums.GameTag.PLAYER_ID, 3);
+                game.Entities[205] = heroCAfter;
+
+                var applyMethod = typeof(HdtBridge.HdtStatePreserver).GetMethod("ApplyRestore", BindingFlags.NonPublic | BindingFlags.Instance);
+                var pendingField = typeof(HdtBridge.HdtStatePreserver).GetField("pending", BindingFlags.NonPublic | BindingFlags.Instance);
+                applyMethod.Invoke(preserver, new object[] { game, overlay, game.CurrentGameStats, pendingField.GetValue(preserver) });
+
+                Check(game.GetTavernUp(205, 4) == 5, "deferred Hero C tavern history did not restore once Hero C loaded");
+                Check(game.GetTavernUp(102, 4) == 0, "Hero B at 102 should still have no leaked history");
+                Check(game.GetTriples(201, 3) == 2 && game.GetTriples(201, 4) == 1, "triples changed on idempotent reinforcement pass");
+            }
+        });
+
         Console.WriteLine("Failures: " + failures);
         return failures == 0 ? 0 : 1;
     }
@@ -1776,6 +1907,11 @@ namespace Hearthstone_Deck_Tracker
         private static List<int> _uniqueDeadPlayers = new List<int>();
         private static List<int> _deadTracker = new List<int>();
         public static int DeadCount => _uniqueDeadPlayers.Count;
+        public static int GetDeadTurnsFor(int playerId)
+        {
+            var idx = _uniqueDeadPlayers.IndexOf(playerId);
+            return idx >= 0 && idx < _deadTracker.Count ? _deadTracker[idx] : -1;
+        }
         public static void Reset() { _uniqueDeadPlayers.Clear(); _deadTracker.Clear(); }
         public static void Seed(IEnumerable<int> players, IEnumerable<int> turns)
         {

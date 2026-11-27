@@ -58,7 +58,7 @@ namespace HS_Reconnector.Core
         private const string BridgeDllName = "HdtBridge.dll";
         private const int MaxPipeResponseBytes = 8192;
         private static readonly UTF8Encoding Utf8NoBom = new UTF8Encoding(false);
-        internal const string ExpectedBridgeVersion = "0.9";
+        internal const string ExpectedBridgeVersion = "0.10";
 
         private readonly object sync = new object();
         private readonly SemaphoreSlim ipcLock = new SemaphoreSlim(1, 1);

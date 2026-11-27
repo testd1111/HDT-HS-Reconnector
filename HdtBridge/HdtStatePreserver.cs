@@ -43,6 +43,24 @@ namespace HdtBridge
             public int PlayerId;
             public string CardId;
             public Dictionary<int, int> Values;
+
+            public HeroMapSnapshot Clone()
+            {
+                return new HeroMapSnapshot
+                {
+                    EntityId = EntityId,
+                    PlayerId = PlayerId,
+                    CardId = CardId,
+                    Values = Values != null ? new Dictionary<int, int>(Values) : new Dictionary<int, int>()
+                };
+            }
+        }
+
+        private sealed class CurrentEntityIdentity
+        {
+            public bool IsHero;
+            public int PlayerId;
+            public string CardId;
         }
 
         private sealed class LeaderboardRaceSnapshot
@@ -417,9 +435,13 @@ namespace HdtBridge
                 // Ensure TeamsWatcher observer is registered once for DominantRace recovery
                 EnsureLeaderboardTeamsWatcherHooked();
 
-                // Merge with any existing active guard maps for the SAME GameHandle (if user reconnects multiple times in one match!)
+                // Merge with any existing pending snapshot and active guard maps for the SAME GameHandle
+                // (e.g. if user reconnects again while HDT is still loading entities after an earlier reconnect).
                 lock (sync)
                 {
+                    if (pending != null && string.Equals(pending.GameHandle, gameHandle, StringComparison.Ordinal))
+                        MergePendingSnapshotInto(pending, snap);
+
                     if (string.Equals(activeRaceGuardGameHandle, gameHandle, StringComparison.Ordinal))
                     {
                         if (activeRaceGuardMap != null)
@@ -690,10 +712,11 @@ namespace HdtBridge
                 }
             }
 
-            // Build lookup for reconnected hero entities by PLAYER_ID and CardId
+            // Build lookup for reconnected entities and heroes by PLAYER_ID and CardId
             var entitiesDict = HdtReflection.GetMemberValue(game, "Entities") as IDictionary;
             var entityByPlayerId = new Dictionary<int, int>();
             var entityByCardId = new Dictionary<string, int>(StringComparer.Ordinal);
+            var currentEntityMetaById = new Dictionary<int, CurrentEntityIdentity>();
             var playerIdTag = HdtReflection.ResolveGameTag("PLAYER_ID");
             var techLevelTag = HdtReflection.ResolveGameTag("PLAYER_TECH_LEVEL");
 
@@ -703,11 +726,18 @@ namespace HdtBridge
                     continue;
 
                 var isHero = Convert.ToBoolean(HdtReflection.GetMemberValue(entry.Value, "IsHero") ?? false);
-                if (!isHero)
-                    continue;
-
                 var cardId = HdtReflection.GetMemberValue(entry.Value, "CardId") as string;
                 var playerId = playerIdTag != null ? GetEntityTag(entry.Value, playerIdTag) : 0;
+
+                currentEntityMetaById[entityId] = new CurrentEntityIdentity
+                {
+                    IsHero = isHero,
+                    PlayerId = playerId,
+                    CardId = cardId ?? string.Empty
+                };
+
+                if (!isHero)
+                    continue;
 
                 if (playerId > 0)
                     entityByPlayerId[playerId] = entityId;
@@ -745,28 +775,23 @@ namespace HdtBridge
 
             // 3. Restore Tavern-up turns & Triples by tier
             var tavernDict = HdtReflection.GetMemberValue(game, "_battlegroundsHeroLatestTavernUpTurn") as IDictionary;
-            restoredTavern = RestoreHeroIntMaps(tavernDict, snap.TavernUpTurns, entityByPlayerId, entityByCardId);
+            restoredTavern = RestoreHeroIntMaps(tavernDict, snap.TavernUpTurns, entityByPlayerId, entityByCardId, currentEntityMetaById, isTriples: false);
 
             var triplesDict = HdtReflection.GetMemberValue(game, "_battlegroundsHeroTriplesByTier") as IDictionary;
-            restoredTriples = RestoreHeroIntMaps(triplesDict, snap.TriplesByTier, entityByPlayerId, entityByCardId);
+            restoredTriples = RestoreHeroIntMaps(triplesDict, snap.TriplesByTier, entityByPlayerId, entityByCardId, currentEntityMetaById, isTriples: true);
 
-            // 4. Restore OpponentDeadForTracker
+            // 4. Restore OpponentDeadForTracker (including merging when HDT partially populated dead players)
             if (snap.UniqueDeadPlayers.Count > 0)
             {
                 var deadForType = HdtReflection.FindType("Hearthstone_Deck_Tracker.OpponentDeadForTracker");
                 var uniqueList = HdtReflection.GetStaticMemberValue(deadForType, "_uniqueDeadPlayers") as IList;
                 var trackerList = HdtReflection.GetStaticMemberValue(deadForType, "_deadTracker") as IList;
-                if (uniqueList != null && trackerList != null && uniqueList.Count == 0 && trackerList.Count == 0)
+                if (uniqueList != null && trackerList != null
+                    && MergeDeadForLists(uniqueList, trackerList, snap.UniqueDeadPlayers, snap.DeadTracker, out var updatedDeadTracker))
                 {
-                    foreach (var pid in snap.UniqueDeadPlayers)
-                        uniqueList.Add(pid);
-                    foreach (var deadTurns in snap.DeadTracker)
-                        trackerList.Add(deadTurns);
-
-                    var deadCopy = new List<int>(snap.DeadTracker);
                     HdtReflection.InvokeOnDispatcher(overlay, () =>
                     {
-                        HdtReflection.InvokeMethod(overlay, "UpdateOpponentDeadForTurns", deadCopy);
+                        HdtReflection.InvokeMethod(overlay, "UpdateOpponentDeadForTurns", updatedDeadTracker);
                     });
                 }
             }
@@ -1162,11 +1187,314 @@ namespace HdtBridge
             }
         }
 
+        private static void MergePendingSnapshotInto(PendingSnapshot previous, PendingSnapshot current)
+        {
+            if (previous == null || current == null)
+                return;
+
+            foreach (var kv in previous.Boards)
+            {
+                if (!current.Boards.ContainsKey(kv.Key))
+                    current.Boards[kv.Key] = kv.Value;
+            }
+
+            foreach (var kv in previous.Deities)
+            {
+                if (!current.Deities.ContainsKey(kv.Key))
+                    current.Deities[kv.Key] = kv.Value;
+            }
+
+            MergeHeroMapSnapshotList(previous.TavernUpTurns, current.TavernUpTurns, isTriples: false);
+            MergeHeroMapSnapshotList(previous.TriplesByTier, current.TriplesByTier, isTriples: true);
+
+            if (previous.UniqueDeadPlayers.Count > 0)
+            {
+                MergeDeadForLists(
+                    current.UniqueDeadPlayers,
+                    current.DeadTracker,
+                    previous.UniqueDeadPlayers,
+                    previous.DeadTracker,
+                    out _);
+            }
+
+            if (current.BobsBuddyInput == null
+                && previous.BobsBuddyInput != null
+                && current.SavedTurn == previous.SavedTurn)
+            {
+                current.BobsBuddyInput = previous.BobsBuddyInput;
+            }
+
+            foreach (var kv in previous.TechLevelByHeroCardId)
+            {
+                if (!current.TechLevelByHeroCardId.TryGetValue(kv.Key, out var curTech) || kv.Value > curTech)
+                    current.TechLevelByHeroCardId[kv.Key] = kv.Value;
+            }
+
+            foreach (var kv in previous.TechLevelByPlayerId)
+            {
+                if (!current.TechLevelByPlayerId.TryGetValue(kv.Key, out var curTech) || kv.Value > curTech)
+                    current.TechLevelByPlayerId[kv.Key] = kv.Value;
+            }
+
+            foreach (var kv in previous.RaceByHeroCardId)
+            {
+                if (!current.RaceByHeroCardId.ContainsKey(kv.Key))
+                    current.RaceByHeroCardId[kv.Key] = kv.Value;
+            }
+        }
+
+        private static void MergeHeroMapSnapshotList(List<HeroMapSnapshot> previous, List<HeroMapSnapshot> current, bool isTriples)
+        {
+            if (previous == null || previous.Count == 0 || current == null)
+                return;
+
+            foreach (var prevItem in previous)
+            {
+                if (prevItem == null || prevItem.Values == null || prevItem.Values.Count == 0)
+                    continue;
+
+                HeroMapSnapshot match = null;
+                foreach (var curItem in current)
+                {
+                    if (SameHeroSnapshot(prevItem, curItem))
+                    {
+                        match = curItem;
+                        break;
+                    }
+                }
+
+                if (match == null)
+                {
+                    current.Add(prevItem.Clone());
+                    continue;
+                }
+
+                if (match.PlayerId <= 0 && prevItem.PlayerId > 0)
+                    match.PlayerId = prevItem.PlayerId;
+                if (string.IsNullOrEmpty(match.CardId) && !string.IsNullOrEmpty(prevItem.CardId))
+                    match.CardId = prevItem.CardId;
+
+                if (isTriples)
+                {
+                    MergeTriplesDictionary(match.Values, prevItem.Values);
+                }
+                else
+                {
+                    foreach (var kv in prevItem.Values)
+                    {
+                        if (!match.Values.ContainsKey(kv.Key))
+                            match.Values[kv.Key] = kv.Value;
+                    }
+                }
+            }
+        }
+
+        private static bool SameHeroSnapshot(HeroMapSnapshot left, HeroMapSnapshot right)
+        {
+            if (left == null || right == null)
+                return false;
+
+            if (left.PlayerId > 0 && right.PlayerId > 0)
+                return left.PlayerId == right.PlayerId;
+
+            if (!string.IsNullOrEmpty(left.CardId) && !string.IsNullOrEmpty(right.CardId))
+                return string.Equals(left.CardId, right.CardId, StringComparison.Ordinal);
+
+            if (left.PlayerId > 0 || right.PlayerId > 0
+                || !string.IsNullOrEmpty(left.CardId) || !string.IsNullOrEmpty(right.CardId))
+            {
+                return false;
+            }
+
+            return left.EntityId > 0 && left.EntityId == right.EntityId;
+        }
+
+        private static bool MergeDeadForLists(
+            IList uniqueList,
+            IList trackerList,
+            List<int> savedUniquePlayers,
+            List<int> savedDeadTracker,
+            out List<int> updatedDeadTracker)
+        {
+            updatedDeadTracker = null;
+            if (uniqueList == null || trackerList == null || savedUniquePlayers == null || savedDeadTracker == null)
+                return false;
+
+            var savedCount = Math.Min(savedUniquePlayers.Count, savedDeadTracker.Count);
+            if (savedCount <= 0)
+                return false;
+
+            var existingCount = Math.Min(uniqueList.Count, trackerList.Count);
+            var existingPids = new List<int>(existingCount);
+            var existingTurns = new List<int>(existingCount);
+            var existingTurnsByPid = new Dictionary<int, int>();
+
+            for (var i = 0; i < existingCount; i++)
+            {
+                if (!(uniqueList[i] is int pid) || !(trackerList[i] is int turns))
+                    continue;
+                existingPids.Add(pid);
+                existingTurns.Add(turns);
+                if (!existingTurnsByPid.TryGetValue(pid, out var prev) || turns > prev)
+                    existingTurnsByPid[pid] = turns;
+            }
+
+            var mergedPids = new List<int>(savedCount + existingPids.Count);
+            var mergedTurns = new List<int>(savedCount + existingPids.Count);
+            var included = new HashSet<int>();
+
+            for (var i = 0; i < savedCount; i++)
+            {
+                var pid = savedUniquePlayers[i];
+                if (!included.Add(pid))
+                    continue;
+                var savedVal = savedDeadTracker[i];
+                var mergedVal = existingTurnsByPid.TryGetValue(pid, out var curVal)
+                    ? Math.Max(curVal, savedVal)
+                    : savedVal;
+                mergedPids.Add(pid);
+                mergedTurns.Add(mergedVal);
+            }
+
+            for (var i = 0; i < existingPids.Count; i++)
+            {
+                var pid = existingPids[i];
+                if (!included.Add(pid))
+                    continue;
+                mergedPids.Add(pid);
+                mergedTurns.Add(existingTurns[i]);
+            }
+
+            var changed = uniqueList.Count != mergedPids.Count || trackerList.Count != mergedTurns.Count;
+            if (!changed)
+            {
+                for (var i = 0; i < mergedPids.Count; i++)
+                {
+                    if (!(uniqueList[i] is int u) || u != mergedPids[i]
+                        || !(trackerList[i] is int t) || t != mergedTurns[i])
+                    {
+                        changed = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!changed)
+                return false;
+
+            uniqueList.Clear();
+            trackerList.Clear();
+            for (var i = 0; i < mergedPids.Count; i++)
+            {
+                uniqueList.Add(mergedPids[i]);
+                trackerList.Add(mergedTurns[i]);
+            }
+
+            updatedDeadTracker = new List<int>(mergedTurns);
+            return true;
+        }
+
+        private static int ResolveTargetHeroEntityId(
+            HeroMapSnapshot item,
+            Dictionary<int, int> entityByPlayerId,
+            Dictionary<string, int> entityByCardId,
+            Dictionary<int, CurrentEntityIdentity> currentEntityMetaById)
+        {
+            if (item == null)
+                return 0;
+
+            if (item.PlayerId > 0 && entityByPlayerId.TryGetValue(item.PlayerId, out var byPid))
+                return byPid;
+
+            if (!string.IsNullOrEmpty(item.CardId) && entityByCardId.TryGetValue(item.CardId, out var byCard))
+            {
+                if (item.PlayerId <= 0
+                    || !currentEntityMetaById.TryGetValue(byCard, out var cardMeta)
+                    || cardMeta.PlayerId <= 0
+                    || cardMeta.PlayerId == item.PlayerId)
+                {
+                    return byCard;
+                }
+            }
+
+            // If we know the hero's PlayerId or CardId, defer instead of risking assigning history
+            // to a reused EntityId that now belongs to (or will belong to) a different hero.
+            if (item.PlayerId > 0 || !string.IsNullOrEmpty(item.CardId))
+                return 0;
+
+            if (item.EntityId <= 0)
+                return 0;
+
+            if (currentEntityMetaById.TryGetValue(item.EntityId, out var occupant) && !occupant.IsHero)
+                return 0;
+
+            return item.EntityId;
+        }
+
+        private static bool MergeTriplesDictionary(IDictionary destination, Dictionary<int, int> savedValues)
+        {
+            if (destination == null || savedValues == null || savedValues.Count == 0)
+                return false;
+
+            var savedTiers = new List<KeyValuePair<int, int>>(savedValues.Count);
+            foreach (var kv in savedValues)
+            {
+                if (kv.Value > 0)
+                    savedTiers.Add(kv);
+            }
+            if (savedTiers.Count == 0)
+                return false;
+            savedTiers.Sort((a, b) => a.Key.CompareTo(b.Key));
+
+            var modified = false;
+            foreach (var kv in savedTiers)
+            {
+                var tier = kv.Key;
+                var savedCount = kv.Value;
+                if (destination.Contains(tier))
+                    continue;
+
+                // HDT's UpdateBattlegroundsPlayerTriples records (totalTriples - sum(lower tiers))
+                // into the hero's current tier after a reset. Deduct the restored lower-tier triples
+                // from the lowest existing higher tier(s) that absorbed them so totals are not doubled.
+                var remainingToDeduct = savedCount;
+                var higherTiers = new List<int>();
+                foreach (DictionaryEntry entry in destination)
+                {
+                    if (entry.Key is int existingTier && existingTier > tier && entry.Value is int existingVal && existingVal > 0)
+                        higherTiers.Add(existingTier);
+                }
+                higherTiers.Sort();
+
+                foreach (var absorberTier in higherTiers)
+                {
+                    if (remainingToDeduct <= 0)
+                        break;
+
+                    var currentVal = (int)destination[absorberTier];
+                    var deduction = Math.Min(remainingToDeduct, currentVal);
+                    var updatedVal = currentVal - deduction;
+                    if (updatedVal > 0)
+                        destination[absorberTier] = updatedVal;
+                    else
+                        destination.Remove(absorberTier);
+                    remainingToDeduct -= deduction;
+                }
+
+                destination[tier] = savedCount;
+                modified = true;
+            }
+
+            return modified;
+        }
+
         private static int RestoreHeroIntMaps(
             IDictionary destination,
             List<HeroMapSnapshot> saved,
             Dictionary<int, int> entityByPlayerId,
-            Dictionary<string, int> entityByCardId)
+            Dictionary<string, int> entityByCardId,
+            Dictionary<int, CurrentEntityIdentity> currentEntityMetaById,
+            bool isTriples)
         {
             if (destination == null || saved == null || saved.Count == 0)
                 return 0;
@@ -1174,14 +1502,7 @@ namespace HdtBridge
             var restored = 0;
             foreach (var item in saved)
             {
-                var targetId = 0;
-                if (item.PlayerId > 0 && entityByPlayerId.TryGetValue(item.PlayerId, out var byPid))
-                    targetId = byPid;
-                else if (!string.IsNullOrEmpty(item.CardId) && entityByCardId.TryGetValue(item.CardId, out var byCard))
-                    targetId = byCard;
-                else if (item.EntityId > 0)
-                    targetId = item.EntityId;
-
+                var targetId = ResolveTargetHeroEntityId(item, entityByPlayerId, entityByCardId, currentEntityMetaById);
                 if (targetId <= 0)
                     continue;
 
@@ -1192,13 +1513,21 @@ namespace HdtBridge
                     destination[targetId] = inner;
                 }
 
-                var anyAdded = false;
-                foreach (var kv in item.Values)
+                bool anyAdded;
+                if (isTriples)
                 {
-                    if (!inner.Contains(kv.Key))
+                    anyAdded = MergeTriplesDictionary(inner, item.Values);
+                }
+                else
+                {
+                    anyAdded = false;
+                    foreach (var kv in item.Values)
                     {
-                        inner[kv.Key] = kv.Value;
-                        anyAdded = true;
+                        if (!inner.Contains(kv.Key))
+                        {
+                            inner[kv.Key] = kv.Value;
+                            anyAdded = true;
+                        }
                     }
                 }
 
